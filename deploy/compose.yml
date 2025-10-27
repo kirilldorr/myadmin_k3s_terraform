@@ -1,0 +1,38 @@
+services:
+  traefik:
+    image: "traefik:v2.5"
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+  myadmin:
+    image: ${MYADMIN_REPO}:latest
+    build:
+      context: ../adminforth-app
+      tags:
+        - ${MYADMIN_REPO}:latest
+      cache_from:
+        - type=registry,ref=${MYADMIN_REPO}:cache
+      cache_to:
+        - type=registry,ref=${MYADMIN_REPO}:cache,mode=max,compression=zstd,image-manifest=true,oci-mediatypes=true
+      
+    pull_policy: always
+    restart: always
+    env_file:
+      - .env.secrets.prod
+
+    volumes:
+      - myadmin-db:/code/db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.myadmin.rule=PathPrefix(`/`)"
+      - "traefik.http.services.myadmin.loadbalancer.server.port=3500"
+      - "traefik.http.routers.myadmin.priority=2"
+
+volumes:
+  myadmin-db:
