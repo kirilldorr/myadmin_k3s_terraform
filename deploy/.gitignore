@@ -5,3 +5,8 @@
 *.tfvars
 tfplan
 .env.secrets.prod
+sa-dash.yaml
+session-manager-plugin.deb
+.env.secrets.prod
+.terraform.lock.hcl
+compose.yml 

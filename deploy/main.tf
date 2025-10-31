@@ -1,85 +1,124 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.25"
+    }
+  }
+}
 
 locals {
-  app_name = "testtf"
-  aws_region = "us-west-2"
+  aws_region        = "us-west-2"
+  vpc_cidr          = "10.0.0.0/16"
+  subnet_a_cidr     = "10.0.10.0/24"
+  subnet_b_cidr     = "10.0.11.0/24"
+  az_a              = "us-west-2a"
+  az_b              = "us-west-2b"
+  cluster_name      = "myapp-eks"
+  node_group_name   = "myapp-nodes"
+  app_name          = "myapp"
+  app_container_port = 3500
+  service_port       = 80
+  admin_secret       = "your_secret"
+  kubernetes_cluster_tag = "kubernetes.io/cluster/myapp-eks"
+  kubernetes_elb_tag     = "kubernetes.io/role/elb"
+  ingress_ports = [
+    { from = 22, to = 22, protocol = "tcp" },
+    { from = 80, to = 80, protocol = "tcp" }
+  ]
+  node_group_scaling = {
+    desired = 1
+    min     = 1
+    max     = 2
+  }
 }
 
 provider "aws" {
   region = local.aws_region
-  profile = "myaws"
 }
 
-data "aws_ami" "ubuntu_linux" {
-  most_recent = true
-  owners      = ["amazon"]
+provider "kubernetes" {
+  host                   = aws_eks_cluster.eks.endpoint
+  cluster_ca_certificate = base64decode(aws_eks_cluster.eks.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.eks.token
+}
 
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+data "aws_eks_cluster_auth" "eks" {
+  name = aws_eks_cluster.eks.name
+}
+
+resource "aws_vpc" "main" {
+  cidr_block = local.vpc_cidr
+  tags       = { Name = "main-vpc" }
+}
+
+resource "aws_subnet" "public_a" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = local.subnet_a_cidr
+  map_public_ip_on_launch = true
+  availability_zone       = local.az_a
+  tags = {
+    Name                              = "public-a"
+    "${local.kubernetes_cluster_tag}" = "shared"
+    "${local.kubernetes_elb_tag}"     = "1"
   }
 }
 
-data "aws_vpc" "default" {
-  default = true
-}
-
-resource "aws_eip" "eip" {
- domain = "vpc"
-}
-
-resource "aws_eip_association" "eip_assoc" {
- instance_id   = aws_instance.app_instance.id
- allocation_id = aws_eip.eip.id
-}
-
-data "aws_subnet" "default_subnet" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-
-  filter {
-    name   = "default-for-az"
-    values = ["true"]
-  }
-
-  filter {
-    name   = "availability-zone"
-    values = ["${local.aws_region}a"]
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = local.subnet_b_cidr
+  map_public_ip_on_launch = true
+  availability_zone       = local.az_b
+  tags = {
+    Name                              = "public-b"
+    "${local.kubernetes_cluster_tag}" = "shared"
+    "${local.kubernetes_elb_tag}"     = "1"
   }
 }
 
-resource "aws_security_group" "instance_sg" {
-  name   = "${local.app_name}-instance-sg"
-  vpc_id = data.aws_vpc.default.id
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "main-igw" }
+}
 
-  ingress {
-    description = "Allow HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
   }
+  tags = { Name = "public-rt" }
+}
 
-  ingress {
-    description = "Allow Docker registry"
-    from_port   = 5000
-    to_port     = 5000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+resource "aws_route_table_association" "public_a_assoc" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public_rt.id
+}
 
-  # SSH
-  ingress {
-    description = "Allow SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+resource "aws_route_table_association" "public_b_assoc" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_security_group" "app_sg" {
+  name   = "app-sg"
+  vpc_id = aws_vpc.main.id
+
+  dynamic "ingress" {
+    for_each = local.ingress_ports
+    content {
+      from_port   = ingress.value.from
+      to_port     = ingress.value.to
+      protocol    = ingress.value.protocol
+      cidr_blocks = ["0.0.0.0/0"]
+    }
   }
 
   egress {
-    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -87,255 +126,142 @@ resource "aws_security_group" "instance_sg" {
   }
 }
 
-resource "aws_key_pair" "app_deployer" {
-  key_name   = "terraform-deploy_${local.app_name}-key"
-  public_key = file("./.keys/id_rsa.pub") # Path to your public SSH key
-}
-
-resource "aws_instance" "app_instance" {
-  ami                    = data.aws_ami.ubuntu_linux.id
-  instance_type          = "t3a.small"  # just change it to another type if you need, check https://instances.vantage.sh/
-  subnet_id              = data.aws_subnet.default_subnet.id
-  vpc_security_group_ids = [aws_security_group.instance_sg.id]
-  key_name               = aws_key_pair.app_deployer.key_name
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
-
-  # prevent accidental termination of ec2 instance and data loss
-  # if you will need to recreate the instance still (not sure why it can be?), you will need to remove this block manually by next command:
-  # > terraform taint aws_instance.app_instance
-  lifecycle {
-    prevent_destroy = true
-    ignore_changes = [ami]
-  }
-
-  root_block_device {
-    volume_size = 20 // Size in GB for root partition
-    volume_type = "gp2"
-    
-    # Even if the instance is terminated, the volume will not be deleted, delete it manually if needed
-    delete_on_termination = false
-  }
-
-  user_data = <<-EOF
-    #!/bin/bash
-    sudo apt-get update
-    sudo apt-get install ca-certificates curl python3 python3-pip -y
-    sudo install -m 0755 -d /etc/apt/keyrings
-    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-    # Add the repository to Apt sources:
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update
-
-    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin screen
-
-    systemctl start docker
-    systemctl enable docker
-    usermod -a -G docker ubuntu
-
-    sudo snap install aws-cli --classic
-
-    echo "done" > /home/ubuntu/user_data_done
-
-  EOF
-
-  tags = {
-    Name = "${local.app_name}-instance"
-  }
-}
-
-resource "null_resource" "wait_for_user_data" {
-  provisioner "remote-exec" {
-    inline = [
-      "echo 'Waiting for EC2 software install to finish...'",
-      "while [ ! -f /home/ubuntu/user_data_done ]; do echo '...'; sleep 2; done",
-      "echo 'EC2 software install finished.'"
-    ]
-
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = file("./.keys/id_rsa")
-      host        = aws_eip_association.eip_assoc.public_ip
-    }
-  }
-
-  depends_on = [aws_instance.app_instance]
-}
-
-resource "aws_ecr_repository" "myadmin_repo" {
-  name = "${local.app_name}-myadmin"
-  force_delete = true
-}
-
-resource "aws_ecr_lifecycle_policy" "safe_cleanup" {
-  repository = aws_ecr_repository.myadmin_repo.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Delete untagged images older than 7 days"
-        selection = {
-          tagStatus     = "untagged"
-          countType     = "sinceImagePushed"
-          countUnit     = "days"
-          countNumber   = 7
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
-}
-
-resource "local_file" "compose_env" {
-  content  = "MYADMIN_REPO=${aws_ecr_repository.myadmin_repo.repository_url}"
-  filename = "${path.module}/.env.ecr"
-}
-
-// allow ec2 instance to login to ECR too pull images
-resource "aws_iam_role" "ec2_role" {
-  name = "${local.app_name}-ec2-role"
-
+resource "aws_iam_role" "eks_cluster_role" {
+  name = "eks-cluster-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17",
+    Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow",
-      Principal = {
-        Service = "ec2.amazonaws.com"
-      },
-      Action = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
     }]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "ecr_access" {
-  role       = aws_iam_role.ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.eks_cluster_role.name
 }
 
-resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "${local.app_name}-instance-profile"
-  role = aws_iam_role.ec2_role.name
+resource "aws_iam_role" "eks_node_role" {
+  name = "eks-node-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
-resource "null_resource" "sync_files_and_run" {
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy_attach" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.eks_node_role.name
+}
 
-  provisioner "local-exec" {
-    command = <<-EOF
-      aws ecr get-login-password --region ${local.aws_region} --profile myaws | docker login --username AWS --password-stdin ${aws_ecr_repository.myadmin_repo.repository_url}
+resource "aws_iam_role_policy_attachment" "eks_cni_policy_attach" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.eks_node_role.name
+}
 
-      echo "Running build"
-      env $(cat .env.ecr | grep -v "#" | xargs) docker buildx bake --progress=plain --push --allow=fs.read=.. -f compose.yml
+resource "aws_iam_role_policy_attachment" "ecr_read_only_attach" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.eks_node_role.name
+}
 
-      # if you will change host, pleasee add -o StrictHostKeyChecking=no
-      echo "Copy files to the instance" 
-      rsync -t -avz --mkpath -e "ssh -i ./.keys/id_rsa -o StrictHostKeyChecking=no" \
-        --delete \
-        --exclude '.terraform' \
-        --exclude '.keys' \
-        --exclude 'tfplan' \
-        . ubuntu@${aws_eip_association.eip_assoc.public_ip}:/home/ubuntu/app/deploy/
+resource "aws_iam_role_policy_attachment" "ssm_core_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  role       = aws_iam_role.eks_node_role.name
+}
 
-      EOF
+resource "aws_eks_cluster" "eks" {
+  name     = local.cluster_name
+  role_arn = aws_iam_role.eks_cluster_role.arn
+
+  vpc_config {
+    subnet_ids         = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+    security_group_ids = [aws_security_group.app_sg.id]
+  }
+}
+
+resource "aws_eks_node_group" "node_group" {
+  cluster_name    = aws_eks_cluster.eks.name
+  node_group_name = local.node_group_name
+  node_role_arn   = aws_iam_role.eks_node_role.arn
+  subnet_ids      = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+
+  scaling_config {
+    desired_size = local.node_group_scaling.desired
+    max_size     = local.node_group_scaling.max
+    min_size     = local.node_group_scaling.min
+  }
+  instance_types = ["t3a.small"]
+}
+
+data "aws_ecr_repository" "app_repo" {
+  name = "myadmin"
+}
+
+resource "kubernetes_deployment" "app" {
+  depends_on = [aws_eks_node_group.node_group]
+
+  metadata {
+    name = "${local.app_name}-deployment"
   }
 
-  # Run docker compose after files have been copied
-  provisioner "remote-exec" {
-    inline = [<<-EOF
-      aws ecr get-login-password --region ${local.aws_region} | docker login --username AWS --password-stdin ${aws_ecr_repository.myadmin_repo.repository_url}
-
-      cd /home/ubuntu/app/deploy
-
-      echo "Spinning up the app"
-      docker compose --progress=plain -p app  --env-file .env.ecr -f compose.yml up -d --remove-orphans
-
-      # cleanup unused cache (run in background to not block terraform)
-      screen -dm docker system prune -f
-    EOF
-    ]
-
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = file("./.keys/id_rsa")
-      host        = aws_eip_association.eip_assoc.public_ip
+  spec {
+    replicas = 1
+    selector {
+      match_labels = { app = local.app_name }
     }
 
+    template {
+      metadata {
+        labels = { app = local.app_name }
+      }
 
-  }
-
-  # Ensure the resource is triggered every time based on timestamp or file hash
-  triggers = {
-    always_run = timestamp()
-  }
-
-  depends_on = [aws_eip_association.eip_assoc, null_resource.wait_for_user_data]
-}
-
-
-output "instance_public_ip" {
-  value = aws_eip_association.eip_assoc.public_ip
-}
-
-
-######### META, tf state ##############
-
-
-# S3 bucket for storing Terraform state
-resource "aws_s3_bucket" "terraform_state" {
-  bucket = "${local.app_name}-terraform-state"
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.bucket
-
-  rule {
-    status = "Enabled"
-    id = "Keep only the latest version of the state file"
-
-    filter {
-      prefix = ""
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 30
-    }
-  }
-}
-
-resource "aws_s3_bucket_versioning" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.bucket
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
-  bucket = aws_s3_bucket.terraform_state.bucket
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm     = "AES256"
+      spec {
+        container {
+          name  = local.app_name
+          image = "${data.aws_ecr_repository.app_repo.repository_url}:latest"
+          port {
+            container_port = local.app_container_port
+          }
+          env {
+            name  = "ADMINFORTH_SECRET"
+            value = local.admin_secret
+          }
+        }
+      }
     }
   }
 }
 
-# Configure the backend to use the S3 bucket
-terraform {
- backend "s3" {
-   bucket         = "testtf-terraform-state"
-   key            = "state.tfstate"  # Define a specific path for the state file
-   region         = "us-west-2"
-   profile        = "myaws"
-   use_lockfile   = true
- }
+resource "kubernetes_service" "app_service" {
+  metadata {
+    name = "${local.app_name}-service"
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path"      = "/"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-port"      = "traffic-port"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval"  = "30"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout"   = "5"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold"   = "2"
+      "service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold" = "2"
+    }
+  }
+
+  spec {
+    selector = { app = local.app_name }
+    type     = "LoadBalancer"
+
+    port {
+      port        = local.service_port
+      target_port = local.app_container_port
+    }
+  }
 }
 
+output "app_service_endpoint" {
+  value = kubernetes_service.app_service.status[0].load_balancer[0].ingress[0].hostname
+}
