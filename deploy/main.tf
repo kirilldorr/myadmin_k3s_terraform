@@ -151,7 +151,7 @@ data "aws_ami" "ubuntu_22_04" {
 }
 
 resource "aws_instance" "k3s_server" {
-  instance_type = "t3.small"
+  instance_type = "t3a.small"
   ami           = data.aws_ami.ubuntu_22_04.id
 
   iam_instance_profile = aws_iam_instance_profile.k3s_instance_profile.name
@@ -174,8 +174,8 @@ resource "aws_instance" "k3s_server" {
     apt-get update -y
     
     echo "LOG Installing Docker&AWS CLI..."
-    apt-g
-output "kubectl_config_commet install -y apt-transport-https ca-certificates curl gnupg lsb-release awscli
+    # --- !!! ВИПРАВЛЕНО СИНТАКСИЧНУ ПОМИЛКУ ТУТ !!! ---
+    apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release awscli
     
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
     
@@ -342,3 +342,4 @@ output "app_endpoint" {
 output "kubectl_config_command" {
   value = "scp -i /home/kdoropii/myadmin/deploy/.keys/k3s-keys.pem ubuntu@${aws_instance.k3s_server.public_dns}:/home/ubuntu/k3s.yaml ~/.kube/config-k3s && export KUBECONFIG=~/.kube/config-k3s"
 }
+
