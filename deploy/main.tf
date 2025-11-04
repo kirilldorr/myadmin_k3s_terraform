@@ -142,7 +142,7 @@ data "aws_ecr_repository" "app_repo" {
 
 data "aws_ami" "ubuntu_22_04" {
   most_recent = true
-  owners      = ["099720109477"]
+  owners      = ["099720109477"] # Canonical ubuntu account ID
 
   filter {
     name   = "name"
@@ -159,8 +159,7 @@ resource "aws_instance" "k3s_server" {
   subnet_id                   = aws_subnet.public_a.id
   vpc_security_group_ids      = [aws_security_group.app_sg.id]
   associate_public_ip_address = true
-
-  key_name = "k3s-keys"
+  key_name                    = "k3s-keys"
 
   tags = {
     Name = local.cluster_name
@@ -174,7 +173,6 @@ resource "aws_instance" "k3s_server" {
     apt-get update -y
     
     echo "LOG Installing Docker&AWS CLI..."
-    # --- !!! ВИПРАВЛЕНО СИНТАКСИЧНУ ПОМИЛКУ ТУТ !!! ---
     apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release awscli
     
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -330,8 +328,21 @@ resource "aws_instance" "k3s_server" {
 
     EOF
 
+  # prevent accidental termination of ec2 instance and data loss
+  # if you will need to recreate the instance still (not sure why it can be?), you will need to remove this block manually by next command:
+  # > terraform taint aws_instance.app_instance
   lifecycle {
     create_before_destroy = true
+    prevent_destroy       = true
+    ignore_changes        = [ami]
+  }
+
+  root_block_device {
+    volume_size = 8 // Size in GB for root partition
+    volume_type = "gp2"
+
+    # Even if the instance is terminated, the volume will not be deleted, delete it manually if needed
+    delete_on_termination = false
   }
 }
 
@@ -340,6 +351,6 @@ output "app_endpoint" {
 }
 
 output "kubectl_config_command" {
-  value = "scp -i /home/kdoropii/myadmin/deploy/.keys/k3s-keys.pem ubuntu@${aws_instance.k3s_server.public_dns}:/home/ubuntu/k3s.yaml ~/.kube/config-k3s && export KUBECONFIG=~/.kube/config-k3s"
+  value = "scp -i .keys/k3s-keys.pem ubuntu@${aws_instance.k3s_server.public_dns}:/home/ubuntu/k3s.yaml ~/.kube/config-k3s && export KUBECONFIG=~/.kube/config-k3s"
 }
 
