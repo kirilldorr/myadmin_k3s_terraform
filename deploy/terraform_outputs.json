@@ -1,0 +1,27 @@
+{
+  "app_endpoint": {
+    "sensitive": false,
+    "type": "string",
+    "value": "http://ec2-54-191-138-17.us-west-2.compute.amazonaws.com"
+  },
+  "ecr_repository_url": {
+    "sensitive": false,
+    "type": "string",
+    "value": "735356255780.dkr.ecr.us-west-2.amazonaws.com/myapp"
+  },
+  "instance_public_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "54.191.138.17"
+  },
+  "kubectl_config_command": {
+    "sensitive": false,
+    "type": "string",
+    "value": "scp -i .keys/k3s-keys.pem ubuntu@ec2-54-191-138-17.us-west-2.compute.amazonaws.com:/home/ubuntu/k3s.yaml ~/.kube/config-k3s \u0026\u0026 export KUBECONFIG=~/.kube/config-k3s"
+  },
+  "ssh_connect_command": {
+    "sensitive": false,
+    "type": "string",
+    "value": "ssh -i .keys/k3s-keys.pem ubuntu@ec2-54-191-138-17.us-west-2.compute.amazonaws.com"
+  }
+}

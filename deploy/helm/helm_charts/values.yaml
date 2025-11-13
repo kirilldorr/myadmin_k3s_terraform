@@ -1,0 +1,4 @@
+appName: myappk3s
+containerPort: 3500
+servicePort: 80
+adminSecret: "your_secret"

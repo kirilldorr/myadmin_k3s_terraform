@@ -1,5 +1,5 @@
 resource "aws_ecr_repository" "app_repo" {
-  name = "myadmin"
+  name = local.app_name
 
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration {

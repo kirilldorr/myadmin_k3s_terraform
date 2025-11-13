@@ -23,8 +23,6 @@ Next, push docker image to ECR
     ```
 ## Install Terraform 
 
-    ## Terrafom
-
     ```bash
     sudo apt-get update && sudo apt-get install -y gnupg software-properties-common curl
     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
@@ -32,16 +30,38 @@ Next, push docker image to ECR
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
     ```
 
+## Install Helm
+
+    ```bash
+    curl https://baltocdn.com/helm/signing.asc | sudo tee /etc/apt/trusted.gpg.d/helm.asc
+    sudo apt-get install apt-transport-https --yes
+    echo "deb https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
+    sudo apt-get install helm
+    ```
+
 ## Start service
 
-Perform all actions in this section in the directory; .../myadmin/deploy
+Perform all actions in this section in the directory; .../myadmin/deploy/terraform
 
     ```bash
     terraform init
 
     terraform apply -auto-approve
     ```
+After this, switch directory to .../deploy/helm/terraform
 
+    ```bash
+    cd ../../helm/terraform
+    ```
+
+    And start our app on EC2 instance which we created in the previous step
+
+    ```bash
+    terraform init
+
+    terraform apply -auto-approve
+    ```
+    
 ## All done!
 
 

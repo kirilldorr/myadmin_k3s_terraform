@@ -5,6 +5,7 @@ terraform {
       version = "~> 5.0"
     }
   }
+
 }
 
 locals {
@@ -14,9 +15,9 @@ locals {
   subnet_b_cidr        = "10.0.11.0/24"
   az_a                 = "us-west-2a"
   az_b                 = "us-west-2b"
-  cluster_name         = "myapp-k3s"
+  cluster_name         = "myappk3s"
   app_name             = "myapp"
-  app_source_code_path = "../"
+  app_source_code_path = "../../"
 
   app_container_port = 3500
   service_port       = 80
@@ -32,6 +33,10 @@ locals {
 
 provider "aws" {
   region = local.aws_region
+}
+
+provider "kubernetes" {
+  config_path = "../k3s.yaml"
 }
 
 data "aws_ami" "ubuntu_22_04" {
@@ -63,7 +68,7 @@ resource "aws_instance" "k3s_server" {
     null_resource.docker_build_and_push
   ]
 
-  user_data = templatefile("./user_data.sh.tpl", {
+  user_data = templatefile("../user_data.sh.tpl", {
     app_name           = local.app_name
     aws_region         = local.aws_region
     admin_secret       = local.admin_secret
@@ -71,23 +76,52 @@ resource "aws_instance" "k3s_server" {
     service_port       = local.service_port
     ecr_registry_id    = aws_ecr_repository.app_repo.registry_id
     ecr_image_full     = "${aws_ecr_repository.app_repo.repository_url}:latest"
-
-  })
+    }
+  )
 
   # prevent accidental termination of ec2 instance and data loss
-  # if you will need to recreate the instance still (not sure why it can be?), you will need to remove this block manually by next command:
-  # > terraform taint aws_instance.app_instance
   lifecycle {
-    create_before_destroy = true
-    #prevent_destroy       = true
+    #create_before_destroy = true       #uncomment in production
+    #prevent_destroy       = true       #uncomment in production
     ignore_changes = [ami]
   }
 
   root_block_device {
-    volume_size = 8 // Size in GB for root partition
+    volume_size = 10 // Size in GB for root partition
     volume_type = "gp2"
 
     # Even if the instance is terminated, the volume will not be deleted, delete it manually if needed
-    delete_on_termination = false
+    delete_on_termination = true #change to false in production if data persistence is needed
+  }
+
+}
+
+resource "null_resource" "get_kubeconfig" {
+  depends_on = [aws_instance.k3s_server]
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      set -e
+      for i in {1..15}; do
+        if nc -z ${aws_instance.k3s_server.public_ip} 22; then
+          break
+        fi
+        sleep 5
+      done
+
+      for i in {1..15}; do
+        scp -q -o StrictHostKeyChecking=no -i ../.keys/k3s-keys.pem \
+          ubuntu@${aws_instance.k3s_server.public_dns}:/home/ubuntu/k3s.yaml ../k3s.yaml && {
+            sleep 5
+            exit 0
+          }
+
+        echo "k3s.yaml not found yet (attempt $i/15), retrying in 10s..."
+        sleep 10
+      done
+    EOT
+    interpreter = ["/bin/bash", "-c"]
   }
 }
+
+

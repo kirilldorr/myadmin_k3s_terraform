@@ -1,0 +1,5 @@
+apiVersion: v2
+name: myappk3s
+description: Helm chart for myadmin app
+version: 0.1.0
+appVersion: "1.0.0"
