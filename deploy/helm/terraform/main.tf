@@ -16,24 +16,23 @@ terraform {
 }
 
 provider "kubernetes" {
-  config_path = "../../k3s.yaml" # Шлях до kubeconfig у папці deploy/
+  config_path = "../../k3s.yaml"
 }
 
 provider "helm" {
   kubernetes = {
-    config_path = "../../k3s.yaml" # Шлях до kubeconfig у папці deploy/
+    config_path = "../../k3s.yaml"
   }
 }
 
 data "local_file" "config_file" {
-  filename = "../../terraform_outputs.json" # Шлях до файлу на одну папку вище
+  filename = "../../terraform_outputs.json"
 }
 
 locals {
   config = jsondecode(data.local_file.config_file.content)
 }
 
-# Цей ресурс, як і раніше, залежить від отримання kubeconfig
 resource "kubernetes_namespace" "myappk3s" {
   metadata {
     name = "myappk3s"
@@ -51,22 +50,22 @@ resource "kubernetes_namespace" "myappk3s" {
 
 resource "helm_release" "myapp" {
   name             = "myapp"
-  chart            = "../helm_charts" # Шлях до чартів у папці deploy/helm/
+  chart            = "../helm_charts"
   namespace        = kubernetes_namespace.myappk3s.metadata.0.name
   create_namespace = false
 
   set = [
     {
       name  = "ecrImageFull"
-      value = local.config.ecr_repository_url.value # Використовуємо пряме посилання
+      value = local.config.ecr_repository_url.value
     },
     {
       name  = "image.tag"
-      value = "latest" # Це було жорстко прописано, так і залишаємо
+      value = "latest"
     },
     {
       name  = "adminSecret"
-      value = var.admin_secret # <-- ЗМІНА
+      value = var.admin_secret
     },
     {
       name  = "ingress.enabled"
@@ -74,7 +73,7 @@ resource "helm_release" "myapp" {
     },
     {
       name  = "ingress.hosts[0].host"
-      value = "${local.config.instance_public_ip.value}.nip.io" # Використовуємо пряме посилання
+      value = "${local.config.instance_public_ip.value}.nip.io"
     },
     {
       name  = "ingress.hosts[0].paths[0].path"
@@ -86,7 +85,7 @@ resource "helm_release" "myapp" {
     },
     {
       name  = "appName"
-      value = var.cluster_name # <-- ЗМІНА (або var.app_name, залежно від вашої логіки)
+      value = var.cluster_name
     }
   ]
   depends_on = [kubernetes_namespace.myappk3s]
