@@ -8,6 +8,5 @@ tfplan
 sa-dash.yaml
 session-manager-plugin.deb
 .env.secrets.prod
-compose.yml 
 .terraform.lock.hcl
 k3s.yaml
