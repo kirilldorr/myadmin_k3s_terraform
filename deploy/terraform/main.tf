@@ -15,13 +15,9 @@ locals {
   subnet_b_cidr        = "10.0.11.0/24"
   az_a                 = "us-west-2a"
   az_b                 = "us-west-2b"
-  cluster_name         = "myappk3s"
-  app_name             = "myapp"
+  app_name             = "myadmink3s"
   app_source_code_path = "../../"
-
-  app_container_port = 3500
-  service_port       = 80
-  admin_secret       = "your_secret"
+  ansible_dir          = "/home/kdoropii/myadmin/deploy/ansible/playbooks"
 
   ingress_ports = [
     { from = 22, to = 22, protocol = "tcp", desc = "SSH" },
@@ -32,11 +28,8 @@ locals {
 }
 
 provider "aws" {
-  region = local.aws_region
-}
-
-provider "kubernetes" {
-  config_path = "../k3s.yaml"
+  region  = local.aws_region
+  profile = "my_aws"
 }
 
 data "aws_ami" "ubuntu_22_04" {
@@ -49,35 +42,29 @@ data "aws_ami" "ubuntu_22_04" {
   }
 }
 
-resource "aws_instance" "k3s_server" {
+resource "aws_key_pair" "app_deployer" {
+  key_name   = "terraform-deploy_${local.app_name}-key"
+  public_key = file("../.keys/id_rsa.pub") # Path to your public SSH key
+}
+
+resource "aws_instance" "ec2_instance" {
   instance_type = "t3a.small"
   ami           = data.aws_ami.ubuntu_22_04.id
 
-  iam_instance_profile = aws_iam_instance_profile.k3s_instance_profile.name
+  iam_instance_profile = aws_iam_instance_profile.instance_profile.name
 
   subnet_id                   = aws_subnet.public_a.id
   vpc_security_group_ids      = [aws_security_group.app_sg.id]
   associate_public_ip_address = true
-  key_name                    = "k3s-keys"
+  key_name                    = aws_key_pair.app_deployer.key_name
 
   tags = {
-    Name = local.cluster_name
+    Name = local.app_name
   }
 
   depends_on = [
     null_resource.docker_build_and_push
   ]
-
-  user_data = templatefile("../user_data.sh.tpl", {
-    app_name           = local.app_name
-    aws_region         = local.aws_region
-    admin_secret       = local.admin_secret
-    app_container_port = local.app_container_port
-    service_port       = local.service_port
-    ecr_registry_id    = aws_ecr_repository.app_repo.registry_id
-    ecr_image_full     = "${aws_ecr_repository.app_repo.repository_url}:latest"
-    }
-  )
 
   # prevent accidental termination of ec2 instance and data loss
   lifecycle {
@@ -96,32 +83,46 @@ resource "aws_instance" "k3s_server" {
 
 }
 
-resource "null_resource" "get_kubeconfig" {
-  depends_on = [aws_instance.k3s_server]
+
+resource "local_file" "ansible_inventory" {
+  content = <<EOF
+[k3s_nodes]
+${aws_instance.ec2_instance.public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=../.keys/id_rsa
+EOF
+
+  filename = "../ansible/inventory.ini"
+}
+
+resource "null_resource" "wait_ssh" {
+  depends_on = [aws_instance.ec2_instance]
 
   provisioner "local-exec" {
-    command     = <<-EOT
-      set -e
-      for i in {1..15}; do
-        if nc -z ${aws_instance.k3s_server.public_ip} 22; then
-          break
-        fi
-        sleep 5
-      done
-
-      for i in {1..15}; do
-        scp -q -o StrictHostKeyChecking=no -i ../.keys/k3s-keys.pem \
-          ubuntu@${aws_instance.k3s_server.public_dns}:/home/ubuntu/k3s.yaml ../k3s.yaml && {
-            sleep 5
-            exit 0
-          }
-
-        echo "k3s.yaml not found yet (attempt $i/15), retrying in 10s..."
-        sleep 10
-      done
+    command = <<EOT
+    bash -c '
+    for i in {1..10}; do
+      nc -zv ${aws_instance.ec2_instance.public_ip} 22 && echo "SSH is ready!" && exit 0
+      sleep 5
+    done
+    exit 1
+    '
     EOT
-    interpreter = ["/bin/bash", "-c"]
   }
 }
 
+resource "null_resource" "ansible_provision" {
+  depends_on = [
+    aws_instance.ec2_instance,
+    local_file.ansible_inventory,
+    null_resource.wait_ssh
+  ]
 
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+
+    command = <<-EOT
+      set -e
+      ANSIBLE_HOST_KEY_CHECKING=False ansible-galaxy collection install community.kubernetes
+      ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i ${path.module}/../ansible/inventory.ini ${local.ansible_dir}/playbook.yaml 
+    EOT
+  }
+}
