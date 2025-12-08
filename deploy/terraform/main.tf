@@ -17,7 +17,7 @@ locals {
   az_b                 = "us-west-2b"
   app_name             = "myadmink3s"
   app_source_code_path = "../../"
-  ansible_dir          = "/home/kdoropii/myadmin/deploy/ansible/playbooks"
+  ansible_dir          = "../ansible/playbooks"
 
   ingress_ports = [
     { from = 22, to = 22, protocol = "tcp", desc = "SSH" },
@@ -29,7 +29,7 @@ locals {
 
 provider "aws" {
   region  = local.aws_region
-  profile = "my_aws"
+  profile = "myaws"
 }
 
 data "aws_ami" "ubuntu_22_04" {
