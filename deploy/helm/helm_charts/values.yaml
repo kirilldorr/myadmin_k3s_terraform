@@ -1,4 +1,5 @@
-appName: myappk3s
+appName: myadmin
 containerPort: 3500
 servicePort: 80
 adminSecret: "your_secret"
+ecrImageFull: 735356255780.dkr.ecr.us-west-2.amazonaws.com/myadmink3s:latest

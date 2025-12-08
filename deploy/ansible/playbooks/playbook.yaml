@@ -1,0 +1,173 @@
+---
+- name: Deploy application
+  hosts: k3s_nodes
+  become: true
+  vars:
+    k3s_version: "v1.27.3+k3s1"
+    helm_version: "v3.12.3"
+    kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+    helm_url: https://get.helm.sh/helm-v3.12.3-linux-amd64.tar.gz
+    helm_dest: /usr/local/bin/helm
+    app_name: myadmin
+    app_namespace: myadmin 
+    chart_path: /home/ubuntu/{{app_name}}/helm_charts
+
+  tasks:
+
+    - name: Install unzip
+      apt:
+        name: unzip
+        state: present
+        update_cache: true
+
+    - name: Download AWS CLI v2
+      get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+        dest: /tmp/awscliv2.zip
+
+    - name: Unzip AWS CLI
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: true
+
+    - name: Install AWS CLI
+      command: /tmp/aws/install --update
+      args:
+        creates: /usr/local/bin/aws
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - sudo
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+        state: present
+
+    - name: Install k3s
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Get ECR token
+      command: aws ecr get-login-password --region us-west-2
+      register: ecr_token
+
+    - name: Configure K3s registry for ECR
+      copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        content: |
+          configs:
+            "735356255780.dkr.ecr.us-west-2.amazonaws.com":
+              auth:
+                username: AWS
+                password: "{{ ecr_token.stdout }}"
+
+    - name: Restart k3s to apply registry changes
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+        enabled: true
+
+    - name: Wait for k3s node to be ready
+      ansible.builtin.wait_for:
+        path: /usr/local/bin/k3s
+        state: present
+        timeout: 300
+
+    - name: Ensure ~/.kube directory exists
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: '0700'
+
+    - name: Copy k3s kubeconfig
+      ansible.builtin.copy:
+        remote_src: true
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: /root/.kube/config
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Replace localhost with public IP in kubeconfig
+      ansible.builtin.replace:
+        path: /root/.kube/config
+        regexp: "server: https://127.0.0.1:6443"
+        replace: "server: https://{{ inventory_hostname }}:6443"
+
+    - name: Download Helm tarball
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/helm.tar.gz"
+        mode: '0644'
+
+    - name: Extract Helm tarball
+      ansible.builtin.unarchive:
+        src: "/tmp/helm.tar.gz"
+        dest: "/tmp/"
+        remote_src: true
+
+    - name: Move Helm binary to /usr/local/bin
+      ansible.builtin.command:
+        cmd: mv /tmp/linux-amd64/helm /usr/local/bin/helm
+        creates: /usr/local/bin/helm
+
+    - name: Ensure python3-pip is installed
+      ansible.builtin.apt:
+        name: python3-pip
+        state: present
+        update_cache: true
+
+    - name: Install Python kubernetes library
+      ansible.builtin.pip:
+        name: kubernetes
+        executable: pip3
+
+    - name: Extract Helm binary
+      ansible.builtin.unarchive:
+        src: /tmp/helm.tar.gz
+        dest: /tmp
+        remote_src: true
+        extra_opts: [--strip-components=1]
+        creates: /tmp/helm
+
+    - name: Move Helm binary to /usr/local/bin
+      ansible.builtin.command:
+        cmd: mv /tmp/helm /usr/local/bin/helm
+        creates: /usr/local/bin/helm
+
+    - name: Copy Helm chart to server
+      ansible.builtin.copy:
+        src: "../../helm/helm_charts"  
+        dest: /home/ubuntu/{{app_name}}
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+        force: true
+
+    - name: Ensure {{app_namespace}} namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: myadmin
+        kubeconfig: "{{ kubeconfig_path }}"
+
+    - name: Deploy {{app_name}} stack via Helm
+      kubernetes.core.helm:
+        name: myadmin
+        chart_ref: /home/ubuntu/{{app_name}}/helm_charts
+        release_namespace: "{{app_namespace}}"
+        kubeconfig: "{{ kubeconfig_path }}"
+        create_namespace: false
+        values_files: 
+          - /home/ubuntu/{{app_name}}/helm_charts/values.yaml
+        force: true
+        atomic: false

@@ -39,6 +39,13 @@ Next, push docker image to ECR
     sudo apt-get install helm
     ```
 
+## Install ansible:
+
+    ```bash
+    sudo add-apt-repository --yes --update ppa:ansible/ansible
+    sudo apt install ansible -y
+
+    ```
 ## Start service
 
 Perform all actions in this section in the directory; .../myadmin/deploy/terraform
@@ -48,20 +55,7 @@ Perform all actions in this section in the directory; .../myadmin/deploy/terrafo
 
     terraform apply -auto-approve
     ```
-After this, switch directory to .../deploy/helm/terraform
 
-    ```bash
-    cd ../../helm/terraform
-    ```
-
-    And start our app on EC2 instance which we created in the previous step
-
-    ```bash
-    terraform init
-
-    terraform apply -auto-approve
-    ```
-    
 ## All done!
 
 

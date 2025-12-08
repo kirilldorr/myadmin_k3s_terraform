@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { Filters } from 'adminforth';
 import apartmentsResource from "./resources/apartments.js";
- 
+
 const ADMIN_BASE_URL = '';
 
 export const admin = new AdminForth({
@@ -32,8 +32,8 @@ export const admin = new AdminForth({
     brandLogo: '@@/assets/logo.svg',
     datesFormat: 'DD MMM',
     timeFormat: 'HH:mm a',
-  showBrandNameInSidebar: true,
-  showBrandLogoInSidebar: true,
+    showBrandNameInSidebar: true,
+    showBrandLogoInSidebar: true,
     emptyFieldPlaceholder: '-',
     styles: {
       colors: {
@@ -107,7 +107,7 @@ if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   app.use(express.json());
 
   const port = 3500;
-  
+
   admin.bundleNow({ hotReload: process.env.NODE_ENV === 'development' }).then(() => {
     console.log('Bundling AdminForth SPA done.');
   });
@@ -122,7 +122,7 @@ if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
         role: 'superadmin',
       });
     }
-        await seedDatabase();
+    await seedDatabase();
   });
 
   admin.express.listen(port, () => {
