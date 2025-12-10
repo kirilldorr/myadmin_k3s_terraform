@@ -18,6 +18,16 @@ locals {
   app_name             = "myadmink3s"
   app_source_code_path = "../../"
   ansible_dir          = "../ansible/playbooks"
+  app_files            = fileset(local.app_source_code_path, "**")
+
+  image_tag = sha256(join("", [
+    for f in local.app_files :
+    try(filesha256("${local.app_source_code_path}/${f}"), "")
+    if length(regexall("^deploy/", f)) == 0
+    && length(regexall("^\\.vscode/", f)) == 0
+    && length(regexall("^node_modules/", f)) == 0
+    && length(regexall("^\\.gitignore", f)) == 0
+  ]))
 
   ingress_ports = [
     { from = 22, to = 22, protocol = "tcp", desc = "SSH" },
@@ -68,9 +78,12 @@ resource "aws_instance" "ec2_instance" {
 
   # prevent accidental termination of ec2 instance and data loss
   lifecycle {
-    #create_before_destroy = true       #uncomment in production
+    create_before_destroy = true #uncomment in production
     #prevent_destroy       = true       #uncomment in production
     ignore_changes = [ami]
+    replace_triggered_by = [
+      null_resource.docker_build_and_push
+    ]
   }
 
   root_block_device {
@@ -96,6 +109,12 @@ EOF
 resource "null_resource" "wait_ssh" {
   depends_on = [aws_instance.ec2_instance]
 
+  triggers = (
+    {
+      instance_id = aws_instance.ec2_instance.id
+    }
+  )
+
   provisioner "local-exec" {
     command = <<EOT
     bash -c '
@@ -113,8 +132,13 @@ resource "null_resource" "ansible_provision" {
   depends_on = [
     aws_instance.ec2_instance,
     local_file.ansible_inventory,
-    null_resource.wait_ssh
+    null_resource.wait_ssh,
+    local_file.image_tag
   ]
+
+  triggers = {
+    instance_id = aws_instance.ec2_instance.id
+  }
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
