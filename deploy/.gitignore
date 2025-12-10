@@ -7,3 +7,4 @@ tfplan
 .env.secrets.prod
 session-manager-plugin.deb
 .terraform.lock.hcl
+image_tag.txt

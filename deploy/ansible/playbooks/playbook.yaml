@@ -8,31 +8,38 @@
     kubeconfig_path: /etc/rancher/k3s/k3s.yaml
     helm_url: https://get.helm.sh/helm-v3.12.3-linux-amd64.tar.gz
     helm_dest: /usr/local/bin/helm
-    app_name: myadmin
-    app_namespace: myadmin 
+    app_name: myadmink3s    # <-- CHANGE TO YOUR APP NAME LIKE IN main.tf local.app_name
+    app_namespace: myadmin  # <-- CHANGE TO YOUR APP NAMESPACE
+    aws_account_id: "735356255780" # <-- CHANGE TO YOUR AWS ACCOUNT ID
     chart_path: /home/ubuntu/{{app_name}}/helm_charts
 
   tasks:
 
+    - name: Read Docker image tag (local)
+      ansible.builtin.set_fact:
+        image_tag: "{{ lookup('file', '../../terraform/image_tag.txt') }}"
+      delegate_to: localhost
+
     - name: Install unzip
-      apt:
+      ansible.builtin.apt:
         name: unzip
         state: present
         update_cache: true
 
     - name: Download AWS CLI v2
-      get_url:
+      ansible.builtin.get_url:
         url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
         dest: /tmp/awscliv2.zip
+        mode: '0644'
 
     - name: Unzip AWS CLI
-      unarchive:
+      ansible.builtin.unarchive:
         src: /tmp/awscliv2.zip
         dest: /tmp
         remote_src: true
 
     - name: Install AWS CLI
-      command: /tmp/aws/install --update
+      ansible.builtin.command: /tmp/aws/install --update
       args:
         creates: /usr/local/bin/aws
 
@@ -50,18 +57,26 @@
           - ca-certificates
         state: present
 
+    - name: Download k3s installation script
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/install_k3s.sh
+        mode: '0700'
+
     - name: Install k3s
-      ansible.builtin.shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -
+      ansible.builtin.command: /tmp/install_k3s.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
       args:
         creates: /usr/local/bin/k3s
 
     - name: Get ECR token
-      command: aws ecr get-login-password --region us-west-2
+      ansible.builtin.command: aws ecr get-login-password --region us-west-2
       register: ecr_token
+      changed_when: false
 
     - name: Configure K3s registry for ECR
-      copy:
+      ansible.builtin.copy:
         dest: /etc/rancher/k3s/registries.yaml
         content: |
           configs:
@@ -69,6 +84,7 @@
               auth:
                 username: AWS
                 password: "{{ ecr_token.stdout }}"
+        mode: '0600'
 
     - name: Restart k3s to apply registry changes
       ansible.builtin.systemd:
@@ -146,28 +162,30 @@
 
     - name: Copy Helm chart to server
       ansible.builtin.copy:
-        src: "../../helm/helm_charts"  
-        dest: /home/ubuntu/{{app_name}}
+        src: "../../helm/helm_charts"
+        dest: /home/ubuntu/{{ app_name }}
         owner: ubuntu
         group: ubuntu
         mode: '0755'
         force: true
 
-    - name: Ensure {{app_namespace}} namespace exists
+    - name: Ensure namespace exists - {{ app_namespace }}
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: myadmin
+        name: "{{ app_namespace }}"
         kubeconfig: "{{ kubeconfig_path }}"
 
-    - name: Deploy {{app_name}} stack via Helm
+    - name: Deploy stack via Helm - {{ app_name }}
       kubernetes.core.helm:
-        name: myadmin
-        chart_ref: /home/ubuntu/{{app_name}}/helm_charts
-        release_namespace: "{{app_namespace}}"
+        name: "{{ app_namespace }}"
+        chart_ref: /home/ubuntu/{{ app_name }}/helm_charts
+        release_namespace: "{{ app_namespace }}"
         kubeconfig: "{{ kubeconfig_path }}"
         create_namespace: false
-        values_files: 
-          - /home/ubuntu/{{app_name}}/helm_charts/values.yaml
+        values_files:
+          - /home/ubuntu/{{ app_name }}/helm_charts/values.yaml
+        values:
+          ecrImageFull: "{{ aws_account_id }}.dkr.ecr.us-west-2.amazonaws.com/{{ app_name }}:{{ image_tag }}"
         force: true
         atomic: false
