@@ -11,7 +11,7 @@
     app_name: myadmink3s    # <-- CHANGE TO YOUR APP NAME LIKE IN main.tf local.app_name
     app_namespace: myadmin  # <-- CHANGE TO YOUR APP NAMESPACE
     aws_account_id: "735356255780" # <-- CHANGE TO YOUR AWS ACCOUNT ID
-    chart_path: /home/ubuntu/{{app_name}}/helm_charts
+    chart_path: /home/ubuntu/{{app_name}}
 
   tasks:
 
@@ -67,6 +67,7 @@
       ansible.builtin.command: /tmp/install_k3s.sh
       environment:
         INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: "--tls-san {{ inventory_hostname }}"
       args:
         creates: /usr/local/bin/k3s
 
@@ -119,73 +120,4 @@
         regexp: "server: https://127.0.0.1:6443"
         replace: "server: https://{{ inventory_hostname }}:6443"
 
-    - name: Download Helm tarball
-      ansible.builtin.get_url:
-        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
-        dest: "/tmp/helm.tar.gz"
-        mode: '0644'
 
-    - name: Extract Helm tarball
-      ansible.builtin.unarchive:
-        src: "/tmp/helm.tar.gz"
-        dest: "/tmp/"
-        remote_src: true
-
-    - name: Move Helm binary to /usr/local/bin
-      ansible.builtin.command:
-        cmd: mv /tmp/linux-amd64/helm /usr/local/bin/helm
-        creates: /usr/local/bin/helm
-
-    - name: Ensure python3-pip is installed
-      ansible.builtin.apt:
-        name: python3-pip
-        state: present
-        update_cache: true
-
-    - name: Install Python kubernetes library
-      ansible.builtin.pip:
-        name: kubernetes
-        executable: pip3
-
-    - name: Extract Helm binary
-      ansible.builtin.unarchive:
-        src: /tmp/helm.tar.gz
-        dest: /tmp
-        remote_src: true
-        extra_opts: [--strip-components=1]
-        creates: /tmp/helm
-
-    - name: Move Helm binary to /usr/local/bin
-      ansible.builtin.command:
-        cmd: mv /tmp/helm /usr/local/bin/helm
-        creates: /usr/local/bin/helm
-
-    - name: Copy Helm chart to server
-      ansible.builtin.copy:
-        src: "../../helm/helm_charts"
-        dest: /home/ubuntu/{{ app_name }}
-        owner: ubuntu
-        group: ubuntu
-        mode: '0755'
-        force: true
-
-    - name: Ensure namespace exists - {{ app_namespace }}
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Namespace
-        name: "{{ app_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
-
-    - name: Deploy stack via Helm - {{ app_name }}
-      kubernetes.core.helm:
-        name: "{{ app_namespace }}"
-        chart_ref: /home/ubuntu/{{ app_name }}/helm_charts
-        release_namespace: "{{ app_namespace }}"
-        kubeconfig: "{{ kubeconfig_path }}"
-        create_namespace: false
-        values_files:
-          - /home/ubuntu/{{ app_name }}/helm_charts/values.yaml
-        values:
-          ecrImageFull: "{{ aws_account_id }}.dkr.ecr.us-west-2.amazonaws.com/{{ app_name }}:{{ image_tag }}"
-        force: true
-        atomic: false

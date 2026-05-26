@@ -72,18 +72,11 @@ resource "aws_instance" "ec2_instance" {
     Name = local.app_name
   }
 
-  depends_on = [
-    null_resource.docker_build_and_push
-  ]
-
   # prevent accidental termination of ec2 instance and data loss
   lifecycle {
     create_before_destroy = true #uncomment in production
     #prevent_destroy       = true       #uncomment in production
     ignore_changes = [ami]
-    replace_triggered_by = [
-      null_resource.docker_build_and_push
-    ]
   }
 
   root_block_device {
@@ -106,47 +99,4 @@ EOF
   filename = "../ansible/inventory.ini"
 }
 
-resource "null_resource" "wait_ssh" {
-  depends_on = [aws_instance.ec2_instance]
 
-  triggers = (
-    {
-      instance_id = aws_instance.ec2_instance.id
-    }
-  )
-
-  provisioner "local-exec" {
-    command = <<EOT
-    bash -c '
-    for i in {1..10}; do
-      nc -zv ${aws_instance.ec2_instance.public_ip} 22 && echo "SSH is ready!" && exit 0
-      sleep 5
-    done
-    exit 1
-    '
-    EOT
-  }
-}
-
-resource "null_resource" "ansible_provision" {
-  depends_on = [
-    aws_instance.ec2_instance,
-    local_file.ansible_inventory,
-    null_resource.wait_ssh,
-    local_file.image_tag
-  ]
-
-  triggers = {
-    instance_id = aws_instance.ec2_instance.id
-  }
-
-  provisioner "local-exec" {
-    interpreter = ["/bin/bash", "-c"]
-
-    command = <<-EOT
-      set -e
-      ANSIBLE_HOST_KEY_CHECKING=False ansible-galaxy collection install community.kubernetes
-      ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i ${path.module}/../ansible/inventory.ini ${local.ansible_dir}/playbook.yaml 
-    EOT
-  }
-}
